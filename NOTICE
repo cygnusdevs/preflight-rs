@@ -1,0 +1,10 @@
+preflight-rs
+
+This service links the `mupdf` Rust crate and invokes the system Ghostscript
+binary. MuPDF and Ghostscript are Copyright (C) Artifex Software, Inc.
+
+MuPDF and Ghostscript are used under the GNU Affero General Public License
+version 3. The service is licensed under AGPL-3.0-or-later.
+
+Commercial licences for MuPDF and Ghostscript are available from Artifex for
+anyone who wants to use this code in a closed-source product.

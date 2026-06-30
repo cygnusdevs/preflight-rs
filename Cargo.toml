@@ -1,0 +1,39 @@
+[package]
+name = "preflight-rs"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+repository = "https://example.invalid/preflight-rs"
+description = "Generic PDF preflight microservice"
+publish = false
+
+[lib]
+name = "preflight_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "preflight-rs"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+axum = { version = "0.8.9", features = ["multipart"] }
+bytes = "1.11"
+chrono = { version = "0.4", features = ["serde"] }
+http = "1.3"
+mupdf = { version = "0.8.0", default-features = false, features = ["base14-fonts"] }
+num_cpus = "1.17"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+subtle = "2.6"
+tempfile = "3.23"
+thiserror = "2.0"
+tokio = { version = "1.48", features = ["fs", "macros", "process", "rt-multi-thread", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+uuid = { version = "1.19", features = ["serde", "v4"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
