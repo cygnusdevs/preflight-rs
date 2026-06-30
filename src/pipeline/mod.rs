@@ -139,7 +139,8 @@ pub async fn run(
         state.config.gs_timeout,
     )
     .await
-    .ok();
+    .ok()
+    .map(|coverage| coverage_for_mode(coverage, options.color_mode));
     result.pages = page_results(&inspection, coverage.as_deref(), &options);
     let colour = coverage.clone().map_or_else(
         || checks::colour::check(Err(()), options.colour_threshold),
@@ -165,6 +166,20 @@ pub async fn run(
     .await;
 
     finalize(state, callback, result).await
+}
+
+fn coverage_for_mode(mut coverage: Vec<InkCoverage>, color_mode: ColorMode) -> Vec<InkCoverage> {
+    if color_mode == ColorMode::Mono {
+        for page in &mut coverage {
+            let gray = page.c.max(page.m).max(page.y).max(page.k);
+            page.c = 0.0;
+            page.m = 0.0;
+            page.y = 0.0;
+            page.k = gray;
+        }
+    }
+
+    coverage
 }
 
 async fn push_step(
@@ -296,5 +311,29 @@ fn file_info(bytes: &[u8]) -> FileInfo {
         bytes: bytes.len() as u64,
         sha256: pdf::sha256_hex(bytes),
         pdf_version: pdf::pdf_version(bytes),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mono_coverage_reports_gray_as_black_only() {
+        let coverage = coverage_for_mode(
+            vec![InkCoverage {
+                page: 1,
+                c: 0.12445,
+                m: 0.12445,
+                y: 0.12445,
+                k: 0.06161,
+            }],
+            ColorMode::Mono,
+        );
+
+        assert_eq!(coverage[0].c, 0.0);
+        assert_eq!(coverage[0].m, 0.0);
+        assert_eq!(coverage[0].y, 0.0);
+        assert_eq!(coverage[0].k, 0.12445);
     }
 }
