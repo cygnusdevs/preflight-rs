@@ -83,6 +83,8 @@ Returns:
 {
   "name": "preflight-rs",
   "version": "0.1.0",
+  "source_url": "https://github.com/cygnusdevs/preflight-rs",
+  "license": "AGPL-3.0-or-later",
   "ghostscript_version": "10.07.1"
 }
 ```

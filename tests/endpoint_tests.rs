@@ -61,6 +61,11 @@ async fn version_returns_service_and_dependency_versions() {
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["name"], "preflight-rs");
     assert!(!json["version"].as_str().unwrap().is_empty());
+    assert_eq!(
+        json["source_url"],
+        "https://github.com/cygnusdevs/preflight-rs"
+    );
+    assert_eq!(json["license"], "AGPL-3.0-or-later");
     assert!(json.get("mupdf_version").is_none());
     assert!(json["ghostscript_version"].as_str().is_some());
 }

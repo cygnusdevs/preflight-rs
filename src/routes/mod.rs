@@ -17,6 +17,8 @@ pub async fn healthz() -> &'static str {
 pub struct VersionInfo {
     pub name: &'static str,
     pub version: &'static str,
+    pub source_url: &'static str,
+    pub license: &'static str,
     pub ghostscript_version: String,
 }
 
@@ -24,6 +26,8 @@ pub async fn version(State(state): State<AppState>) -> Json<VersionInfo> {
     Json(VersionInfo {
         name: "preflight-rs",
         version: env!("CARGO_PKG_VERSION"),
+        source_url: "https://github.com/cygnusdevs/preflight-rs",
+        license: "AGPL-3.0-or-later",
         ghostscript_version: gs::ghostscript_version(&state.config.gs_bin).await,
     })
 }
