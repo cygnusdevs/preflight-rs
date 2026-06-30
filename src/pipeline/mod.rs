@@ -35,6 +35,7 @@ pub async fn run(
             &state.config.gs_bin,
             &analysis_bytes,
             &state.gs_permits,
+            state.config.gs_timeout,
         )
         .await
         {
@@ -131,9 +132,14 @@ pub async fn run(
     )
     .await;
 
-    let coverage = crate::gs::run_inkcov(&state.config.gs_bin, &analysis_bytes, &state.gs_permits)
-        .await
-        .ok();
+    let coverage = crate::gs::run_inkcov(
+        &state.config.gs_bin,
+        &analysis_bytes,
+        &state.gs_permits,
+        state.config.gs_timeout,
+    )
+    .await
+    .ok();
     result.pages = page_results(&inspection, coverage.as_deref(), &options);
     let colour = coverage.clone().map_or_else(
         || checks::colour::check(Err(()), options.colour_threshold),

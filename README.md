@@ -53,6 +53,7 @@ Environment variables:
 - `COLOR_MODE` default `color`; use `mono` to convert uploads to grayscale before analysis
 - `GS_CONCURRENCY` default logical CPU count
 - `GS_BIN` default `gs`
+- `GS_TIMEOUT_SECONDS` default `300`
 - `RUST_LOG` default from tracing subscriber
 
 ## Run

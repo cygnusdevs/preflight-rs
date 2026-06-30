@@ -28,7 +28,7 @@ pub fn check(coverage: Result<Vec<InkCoverage>, ()>, threshold: f64) -> CheckRes
         }
         Err(()) => CheckResult::new(
             "colour",
-            Severity::Info,
+            Severity::Error,
             CheckStatus::Fail,
             json!({
                 "has_colour": false,

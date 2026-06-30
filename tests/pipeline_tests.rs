@@ -96,6 +96,14 @@ fn result_serializes_page_facts_separately_from_checks() {
     assert_eq!(json["source_file"], json["analysed_file"]);
 }
 
+#[test]
+fn colour_check_failure_is_a_hard_failure() {
+    let check = preflight_rs::pipeline::checks::colour::check(Err(()), 0.01);
+
+    assert_eq!(check.severity, Severity::Error);
+    assert_eq!(check.status, CheckStatus::Fail);
+}
+
 fn result() -> PreflightResult {
     let file = FileInfo {
         bytes: 10,

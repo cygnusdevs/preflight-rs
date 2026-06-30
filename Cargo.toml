@@ -3,7 +3,7 @@ name = "preflight-rs"
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
-repository = "https://example.invalid/preflight-rs"
+repository = "https://github.com/cygnusdevs/preflight-rs"
 description = "Generic PDF preflight microservice"
 publish = false
 

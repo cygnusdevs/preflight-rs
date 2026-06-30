@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-use std::{env, net::SocketAddr, str::FromStr};
+use std::{env, net::SocketAddr, str::FromStr, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -53,6 +53,7 @@ pub struct Config {
     pub defaults: AnalysisOptions,
     pub gs_concurrency: usize,
     pub gs_bin: String,
+    pub gs_timeout: Duration,
 }
 
 #[derive(Debug, Error)]
@@ -67,6 +68,10 @@ impl Config {
     pub fn from_env() -> Result<Self, ConfigError> {
         let api_bearer_token =
             env::var("API_BEARER_TOKEN").map_err(|_| ConfigError::MissingToken)?;
+
+        if api_bearer_token.trim().is_empty() || api_bearer_token == "change-me" {
+            return Err(ConfigError::Invalid("API_BEARER_TOKEN"));
+        }
 
         Ok(Self {
             api_bearer_token,
@@ -90,6 +95,7 @@ impl Config {
                 .transpose()?
                 .unwrap_or_else(|| num_cpus::get().max(1)),
             gs_bin: env::var("GS_BIN").unwrap_or_else(|_| "gs".to_owned()),
+            gs_timeout: Duration::from_secs(parse_env("GS_TIMEOUT_SECONDS", "300")?),
         })
     }
 
@@ -101,6 +107,7 @@ impl Config {
             defaults: AnalysisOptions::default(),
             gs_concurrency: 1,
             gs_bin: "gs".to_owned(),
+            gs_timeout: Duration::from_secs(300),
         }
     }
 }

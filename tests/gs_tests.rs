@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-use preflight_rs::gs::{parse_inkcov, InkCoverage};
+use std::{os::unix::fs::PermissionsExt, time::Duration};
+
+use preflight_rs::gs::{parse_inkcov, run_inkcov, InkCoverage};
+use tempfile::tempdir;
+use tokio::sync::Semaphore;
 
 #[test]
 fn parse_inkcov_reads_cmyk_lines_and_numbers_pages() {
@@ -40,4 +44,31 @@ fn parse_inkcov_rejects_output_without_coverage_rows() {
     let err = parse_inkcov("GPL Ghostscript 10.07.1").expect_err("missing rows is invalid");
 
     assert!(err.to_string().contains("coverage"));
+}
+
+#[tokio::test]
+async fn run_inkcov_times_out_slow_ghostscript_processes() {
+    let dir = tempdir().unwrap();
+    let script = dir.path().join("slow-gs");
+    std::fs::write(&script, "#!/bin/sh\nsleep 2\n").unwrap();
+    let mut permissions = std::fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&script, permissions).unwrap();
+
+    let result = tokio::time::timeout(
+        Duration::from_millis(1500),
+        run_inkcov(
+            script.to_str().unwrap(),
+            b"%PDF-1.7\n%%EOF",
+            &Semaphore::new(1),
+            Duration::from_millis(250),
+        ),
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "Ghostscript process did not time out internally"
+    );
+    assert!(result.unwrap().is_err());
 }

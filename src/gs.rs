@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-use std::path::Path;
+use std::{path::Path, process::Output, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use tempfile::tempdir;
@@ -30,6 +30,8 @@ pub enum GsError {
     Status,
     #[error("semaphore")]
     Semaphore,
+    #[error("timeout")]
+    Timeout,
 }
 
 pub fn parse_inkcov(output: &str) -> Result<Vec<InkCoverage>, GsError> {
@@ -66,18 +68,20 @@ pub async fn run_inkcov(
     gs_bin: &str,
     pdf: &[u8],
     semaphore: &Semaphore,
+    timeout: Duration,
 ) -> Result<Vec<InkCoverage>, GsError> {
     let _permit = semaphore.acquire().await.map_err(|_| GsError::Semaphore)?;
     let dir = tempdir()?;
     let path = dir.path().join("input.pdf");
     tokio::fs::write(&path, pdf).await?;
-    run_inkcov_file(gs_bin, &path).await
+    run_inkcov_file(gs_bin, &path, timeout).await
 }
 
 pub async fn convert_pdf_to_grayscale(
     gs_bin: &str,
     pdf: &[u8],
     semaphore: &Semaphore,
+    timeout: Duration,
 ) -> Result<Vec<u8>, GsError> {
     let _permit = semaphore.acquire().await.map_err(|_| GsError::Semaphore)?;
     let dir = tempdir()?;
@@ -85,7 +89,8 @@ pub async fn convert_pdf_to_grayscale(
     let output = dir.path().join("output.pdf");
     tokio::fs::write(&input, pdf).await?;
 
-    let status = Command::new(gs_bin)
+    let mut command = Command::new(gs_bin);
+    command
         .arg("-q")
         .arg("-dSAFER")
         .arg("-dBATCH")
@@ -95,26 +100,30 @@ pub async fn convert_pdf_to_grayscale(
         .arg("-dProcessColorModel=/DeviceGray")
         .arg("-dCompatibilityLevel=1.4")
         .arg(format!("-sOutputFile={}", output.display()))
-        .arg(&input)
-        .status()
-        .await?;
+        .arg(&input);
 
-    if !status.success() {
+    let output_result = output_with_timeout(command, timeout).await?;
+
+    if !output_result.status.success() {
         return Err(GsError::Status);
     }
 
     Ok(tokio::fs::read(output).await?)
 }
 
-async fn run_inkcov_file(gs_bin: &str, path: &Path) -> Result<Vec<InkCoverage>, GsError> {
-    let output = Command::new(gs_bin)
+async fn run_inkcov_file(
+    gs_bin: &str,
+    path: &Path,
+    timeout: Duration,
+) -> Result<Vec<InkCoverage>, GsError> {
+    let mut command = Command::new(gs_bin);
+    command
         .arg("-q")
         .arg("-o")
         .arg("-")
         .arg("-sDEVICE=inkcov")
-        .arg(path)
-        .output()
-        .await?;
+        .arg(path);
+    let output = output_with_timeout(command, timeout).await?;
 
     if !output.status.success() {
         return Err(GsError::Status);
@@ -123,6 +132,15 @@ async fn run_inkcov_file(gs_bin: &str, path: &Path) -> Result<Vec<InkCoverage>, 
     let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
     combined.push_str(&String::from_utf8_lossy(&output.stderr));
     parse_inkcov(&combined)
+}
+
+async fn output_with_timeout(mut command: Command, timeout: Duration) -> Result<Output, GsError> {
+    let output = command.kill_on_drop(true).output();
+
+    tokio::time::timeout(timeout, output)
+        .await
+        .map_err(|_| GsError::Timeout)?
+        .map_err(GsError::Io)
 }
 
 pub async fn ghostscript_version(gs_bin: &str) -> String {
