@@ -77,6 +77,8 @@ pub struct Summary {
 pub struct AnalysisInfo {
     pub color_mode: ColorMode,
     pub converted_to_grayscale: bool,
+    pub fit_to_page: bool,
+    pub fitted_to_page: bool,
     pub max_pages: u32,
     pub margin_mm: f64,
     pub min_dpi: f64,

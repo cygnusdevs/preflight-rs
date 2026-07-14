@@ -28,7 +28,7 @@ pub async fn process(
     let state_for_job = state.clone();
 
     tokio::spawn(async move {
-        pipeline::run(
+        let _ = pipeline::run(
             &state_for_job,
             job_id,
             upload.file,

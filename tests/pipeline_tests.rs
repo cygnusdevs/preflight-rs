@@ -118,6 +118,8 @@ fn result() -> PreflightResult {
         AnalysisInfo {
             color_mode: ColorMode::Color,
             converted_to_grayscale: false,
+            fit_to_page: false,
+            fitted_to_page: false,
             max_pages: 500,
             margin_mm: 5.0,
             min_dpi: 150.0,

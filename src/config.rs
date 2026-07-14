@@ -12,6 +12,7 @@ pub struct AnalysisOptions {
     pub min_dpi: f64,
     pub colour_threshold: f64,
     pub color_mode: ColorMode,
+    pub fit_to_page: bool,
 }
 
 impl Default for AnalysisOptions {
@@ -22,6 +23,7 @@ impl Default for AnalysisOptions {
             min_dpi: 150.0,
             colour_threshold: 0.01,
             color_mode: ColorMode::Color,
+            fit_to_page: false,
         }
     }
 }
@@ -83,6 +85,7 @@ impl Config {
                 min_dpi: parse_env("MIN_DPI", "150")?,
                 colour_threshold: parse_env("COLOUR_THRESHOLD", "0.01")?,
                 color_mode: parse_env("COLOR_MODE", "color")?,
+                fit_to_page: false,
             },
             gs_concurrency: env::var("GS_CONCURRENCY")
                 .ok()

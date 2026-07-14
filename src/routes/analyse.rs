@@ -18,5 +18,5 @@ pub async fn analyse(
 ) -> Result<Json<crate::models::PreflightResult>, ApiError> {
     let upload = parse_upload(&state, multipart, false).await?;
     let result = pipeline::run(&state, Uuid::new_v4(), upload.file, upload.options, None).await;
-    Ok(Json(result))
+    Ok(Json(result.result))
 }

@@ -19,29 +19,87 @@ use crate::{
 
 const TOTAL_CHECKS: u8 = 9;
 
+pub struct PipelineOutput {
+    pub result: PreflightResult,
+    pub pdf: Option<bytes::Bytes>,
+}
+
 pub async fn run(
     state: &AppState,
     job_id: Uuid,
     bytes: bytes::Bytes,
     options: AnalysisOptions,
     callback: Option<CallbackTarget>,
-) -> PreflightResult {
+) -> PipelineOutput {
     let source_file = file_info(&bytes);
     let mut analysis_bytes = bytes;
     let original_magic = pdf::has_pdf_magic(&analysis_bytes);
-    let mut converted_to_grayscale = false;
-    let conversion_failed = if original_magic && options.color_mode == ColorMode::Mono {
-        match crate::gs::convert_pdf_to_grayscale(
-            &state.config.gs_bin,
-            &analysis_bytes,
-            &state.gs_permits,
-            state.config.gs_timeout,
+    let source_inspection = original_magic
+        .then(|| pdf::inspect_pdf_metadata(&analysis_bytes).ok())
+        .flatten();
+    if source_inspection
+        .as_ref()
+        .and_then(|inspection| inspection.page_count)
+        .is_some_and(|count| count > options.max_pages)
+    {
+        let analysis = AnalysisInfo {
+            color_mode: options.color_mode,
+            converted_to_grayscale: false,
+            fit_to_page: options.fit_to_page,
+            fitted_to_page: false,
+            max_pages: options.max_pages,
+            margin_mm: options.margin_mm,
+            min_dpi: options.min_dpi,
+            colour_threshold: options.colour_threshold,
+        };
+        let mut result = PreflightResult::new(job_id, source_file.clone(), source_file, analysis);
+        let inspection = source_inspection.as_ref().unwrap();
+
+        push_step(
+            state,
+            &callback,
+            &mut result,
+            checks::pdf_valid::check(true, true),
+            1,
         )
-        .await
-        {
-            Ok(converted) => {
-                analysis_bytes = bytes::Bytes::from(converted);
-                converted_to_grayscale = true;
+        .await;
+        push_step(
+            state,
+            &callback,
+            &mut result,
+            checks::readable::check(inspection),
+            2,
+        )
+        .await;
+        push_step(
+            state,
+            &callback,
+            &mut result,
+            checks::encrypted::check(inspection),
+            3,
+        )
+        .await;
+        push_step(
+            state,
+            &callback,
+            &mut result,
+            checks::page_count::check(inspection, options.max_pages),
+            4,
+        )
+        .await;
+
+        return finalize(state, callback, result, None).await;
+    }
+
+    let can_transform = source_inspection
+        .as_ref()
+        .is_some_and(|inspection| !inspection.encrypted && !inspection.restrictive_permissions);
+    let mut fitted_to_page = false;
+    let fitting_failed = if can_transform && options.fit_to_page {
+        match pdf::fit_pdf_to_a4(&analysis_bytes, options.margin_mm) {
+            Ok(fitted) => {
+                analysis_bytes = bytes::Bytes::from(fitted);
+                fitted_to_page = true;
                 false
             }
             Err(_) => true,
@@ -49,10 +107,33 @@ pub async fn run(
     } else {
         false
     };
+    let mut converted_to_grayscale = false;
+    let conversion_failed =
+        if can_transform && !fitting_failed && options.color_mode == ColorMode::Mono {
+            match crate::gs::convert_pdf_to_grayscale(
+                &state.config.gs_bin,
+                &analysis_bytes,
+                &state.gs_permits,
+                state.config.gs_timeout,
+            )
+            .await
+            {
+                Ok(converted) => {
+                    analysis_bytes = bytes::Bytes::from(converted);
+                    converted_to_grayscale = true;
+                    false
+                }
+                Err(_) => true,
+            }
+        } else {
+            false
+        };
     let analysed_file = file_info(&analysis_bytes);
     let analysis = AnalysisInfo {
         color_mode: options.color_mode,
         converted_to_grayscale,
+        fit_to_page: options.fit_to_page,
+        fitted_to_page,
         max_pages: options.max_pages,
         margin_mm: options.margin_mm,
         min_dpi: options.min_dpi,
@@ -60,7 +141,7 @@ pub async fn run(
     };
     let mut result = PreflightResult::new(job_id, source_file, analysed_file, analysis);
 
-    let magic = original_magic && !conversion_failed;
+    let magic = original_magic && !fitting_failed && !conversion_failed;
     let inspection = if magic {
         let inspect_bytes = analysis_bytes.clone();
         tokio::task::spawn_blocking(move || pdf::inspect_pdf(&inspect_bytes))
@@ -74,7 +155,7 @@ pub async fn run(
     let pdf_valid = checks::pdf_valid::check(magic, inspection.is_some());
     push_step(state, &callback, &mut result, pdf_valid, 1).await;
     if result.status == ResultStatus::Failed {
-        return finalize(state, callback, result).await;
+        return finalize(state, callback, result, None).await;
     }
 
     let inspection = inspection.expect("inspection exists after pdf_valid pass");
@@ -88,7 +169,7 @@ pub async fn run(
     )
     .await;
     if result.status == ResultStatus::Failed {
-        return finalize(state, callback, result).await;
+        return finalize(state, callback, result, None).await;
     }
 
     push_step(
@@ -100,7 +181,7 @@ pub async fn run(
     )
     .await;
     if result.status == ResultStatus::Failed {
-        return finalize(state, callback, result).await;
+        return finalize(state, callback, result, None).await;
     }
 
     push_step(
@@ -112,7 +193,7 @@ pub async fn run(
     )
     .await;
     if result.status == ResultStatus::Failed {
-        return finalize(state, callback, result).await;
+        return finalize(state, callback, result, None).await;
     }
 
     push_step(
@@ -166,7 +247,7 @@ pub async fn run(
     )
     .await;
 
-    finalize(state, callback, result).await
+    finalize(state, callback, result, Some(analysis_bytes)).await
 }
 
 /// Ghostscript can fail partway through a document and still exit successfully,
@@ -227,7 +308,8 @@ async fn finalize(
     state: &AppState,
     callback: Option<CallbackTarget>,
     mut result: PreflightResult,
-) -> PreflightResult {
+    pdf: Option<bytes::Bytes>,
+) -> PipelineOutput {
     result.finalize();
 
     if let Some(target) = callback {
@@ -247,7 +329,7 @@ async fn finalize(
         state.callbacks.post_event(&target, &event).await;
     }
 
-    result
+    PipelineOutput { result, pdf }
 }
 
 fn page_results(

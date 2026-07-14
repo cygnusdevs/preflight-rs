@@ -256,6 +256,150 @@ async fn analyse_converts_to_mono_when_requested() {
 }
 
 #[tokio::test]
+async fn prepare_returns_analysis_and_fitted_pdf() {
+    let boundary = "X-BOUNDARY";
+    let body = multipart_body(
+        boundary,
+        COLOUR_PDF,
+        &[
+            ("fit_to_page", "true"),
+            ("margin_mm", "5"),
+            ("color_mode", "mono"),
+        ],
+    );
+
+    let response = app(AppState::new(Config::for_tests("secret")))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/pdf/prepare")
+                .header("authorization", "Bearer secret")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(content_type.starts_with("multipart/mixed; boundary="));
+
+    let response_boundary = content_type.split("boundary=").nth(1).unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json = mixed_part(&body, response_boundary, "application/json");
+    let pdf = mixed_part(&body, response_boundary, "application/pdf");
+    let result: Value = serde_json::from_slice(json).unwrap();
+    let inspection = preflight_rs::pdf::inspect_pdf(pdf).unwrap();
+
+    assert_eq!(result["analysis"]["fit_to_page"], true);
+    assert_eq!(result["analysis"]["fitted_to_page"], true);
+    assert_eq!(result["analysis"]["converted_to_grayscale"], true);
+    assert_eq!(result["summary"]["has_colour"], false);
+    assert!(pdf.starts_with(b"%PDF"));
+    assert!(inspection.pages.iter().all(|page| page.size.w_mm > 208.0
+        && page.size.w_mm < 212.0
+        && page.size.h_mm > 295.0
+        && page.size.h_mm < 299.0));
+}
+
+#[tokio::test]
+async fn prepare_enforces_page_limit_before_conversion() {
+    let boundary = "X-BOUNDARY";
+    let pdf = two_page_pdf();
+    let body = multipart_body(
+        boundary,
+        &pdf,
+        &[
+            ("max_pages", "1"),
+            ("fit_to_page", "true"),
+            ("color_mode", "mono"),
+        ],
+    );
+    let mut config = Config::for_tests("secret");
+    config.gs_bin = "/missing/ghostscript".to_owned();
+
+    let response = app(AppState::new(config))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/pdf/prepare")
+                .header("authorization", "Bearer secret")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let response_boundary = content_type.split("boundary=").nth(1).unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let result: Value =
+        serde_json::from_slice(mixed_part(&body, response_boundary, "application/json")).unwrap();
+    let failed_check = result["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["status"] == "fail")
+        .unwrap();
+
+    assert_eq!(failed_check["id"], "page_count");
+    assert_eq!(result["analysis"]["fitted_to_page"], false);
+    assert_eq!(result["analysis"]["converted_to_grayscale"], false);
+    assert!(!body
+        .windows(b"Content-Type: application/pdf".len())
+        .any(|window| window == b"Content-Type: application/pdf"));
+}
+
+#[tokio::test]
+async fn prepare_rejects_margin_that_leaves_no_printable_area() {
+    let boundary = "X-BOUNDARY";
+    let body = multipart_body(
+        boundary,
+        NORMAL_PDF,
+        &[("fit_to_page", "true"), ("margin_mm", "105")],
+    );
+
+    let response = app(AppState::new(Config::for_tests("secret")))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/pdf/prepare")
+                .header("authorization", "Bearer secret")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn process_requires_callback_url() {
     let boundary = "X-BOUNDARY";
     let body = format!(
@@ -331,4 +475,34 @@ fn multipart_body(boundary: &str, file: &[u8], fields: &[(&str, &str)]) -> Vec<u
     body.extend_from_slice(file);
     body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
     body
+}
+
+fn mixed_part<'a>(body: &'a [u8], boundary: &str, content_type: &str) -> &'a [u8] {
+    let header = format!("Content-Type: {content_type}\r\n");
+    let header_start = body
+        .windows(header.len())
+        .position(|window| window == header.as_bytes())
+        .unwrap();
+    let content_start = body[header_start..]
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .unwrap()
+        + header_start
+        + 4;
+    let delimiter = format!("\r\n--{boundary}");
+    let content_end = body[content_start..]
+        .windows(delimiter.len())
+        .position(|window| window == delimiter.as_bytes())
+        .unwrap()
+        + content_start;
+
+    &body[content_start..content_end]
+}
+
+fn two_page_pdf() -> Vec<u8> {
+    let mut document = mupdf::pdf::PdfDocument::from_bytes(NORMAL_PDF).unwrap();
+    document.duplicate_page(0).unwrap();
+    let mut output = Vec::new();
+    document.write_to(&mut output).unwrap();
+    output
 }

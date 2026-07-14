@@ -2,6 +2,7 @@
 
 pub mod analyse;
 mod multipart;
+pub mod prepare;
 pub mod process;
 
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};

@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use preflight_rs::pdf::{
-    image_dpi, is_a4_size_mm, is_blank_page, is_tight_to_edge, ImageFact, PageContentFact,
-    PageSizeMm, RectMm,
+    fit_pdf_to_a4, image_dpi, inspect_pdf, is_a4_size_mm, is_blank_page, is_tight_to_edge,
+    ImageFact, PageContentFact, PageSizeMm, RectMm,
 };
+
+const NORMAL_PDF: &[u8] = include_bytes!("fixtures/normal_text.pdf");
 
 #[test]
 fn a4_tolerance_accepts_portrait_and_landscape_with_two_mm_slack() {
@@ -54,4 +56,24 @@ fn image_dpi_uses_placed_size_in_inches() {
     };
 
     assert_eq!(image_dpi(&image).round() as u32, 150);
+}
+
+#[test]
+fn fitting_pdf_emits_a4_pages_with_preserved_content() {
+    let output = fit_pdf_to_a4(NORMAL_PDF, 5.0).unwrap();
+    let inspection = inspect_pdf(&output).unwrap();
+
+    assert!(output.starts_with(b"%PDF"));
+    assert_ne!(output, NORMAL_PDF);
+    assert_eq!(inspection.pages.len(), 1);
+    assert!(is_a4_size_mm(
+        inspection.pages[0].size.w_mm,
+        inspection.pages[0].size.h_mm
+    ));
+    assert!(inspection.pages[0].content.text_chars > 0);
+    assert!(!is_tight_to_edge(
+        RectMm::new(0.0, 0.0, 210.0, 297.0),
+        inspection.pages[0].content_bbox.unwrap(),
+        5.0,
+    ));
 }

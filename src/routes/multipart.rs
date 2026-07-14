@@ -56,11 +56,24 @@ pub async fn parse_upload(
             "color_mode" => {
                 options.color_mode = parse_field(field).await?;
             }
+            "fit_to_page" => {
+                options.fit_to_page = parse_field(field).await?;
+            }
             _ => {}
         }
     }
 
     if require_callback && callback_url.as_deref().unwrap_or_default().is_empty() {
+        return Err(ApiError::BadRequest);
+    }
+    if options.max_pages == 0
+        || !options.margin_mm.is_finite()
+        || !(0.0..105.0).contains(&options.margin_mm)
+        || !options.min_dpi.is_finite()
+        || options.min_dpi <= 0.0
+        || !options.colour_threshold.is_finite()
+        || !(0.0..=1.0).contains(&options.colour_threshold)
+    {
         return Err(ApiError::BadRequest);
     }
 

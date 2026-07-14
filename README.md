@@ -123,6 +123,27 @@ curl -sS \
   http://localhost:8080/pdf/process
 ```
 
+`POST /pdf/prepare`
+
+Synchronous multipart upload. It returns a `multipart/mixed` response containing
+the JSON preflight result and, when preflight succeeds, the analysed PDF.
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer secret" \
+  -F "file=@document.pdf;type=application/pdf" \
+  -F "max_pages=500" \
+  -F "margin_mm=5" \
+  -F "fit_to_page=true" \
+  -F "color_mode=mono" \
+  http://localhost:8080/pdf/prepare
+```
+
+When `fit_to_page=true`, every source page is scaled proportionally and centred
+on an A4 page inside the requested `margin_mm`. Content is never cropped or
+stretched. The service uses temporary files only while processing the request
+and does not persist uploads or prepared PDFs.
+
 ## Result Schema
 
 ```json
@@ -143,6 +164,8 @@ curl -sS \
   "analysis": {
     "color_mode": "color",
     "converted_to_grayscale": false,
+    "fit_to_page": false,
+    "fitted_to_page": false,
     "max_pages": 500,
     "margin_mm": 5.0,
     "min_dpi": 150.0,

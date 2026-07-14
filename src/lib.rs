@@ -49,6 +49,7 @@ pub fn app(state: AppState) -> Router {
             "/pdf",
             Router::new()
                 .route("/analyse", post(routes::analyse::analyse))
+                .route("/prepare", post(routes::prepare::prepare))
                 .route("/process", post(routes::process::process)),
         )
         .route_layer(middleware::from_fn_with_state(

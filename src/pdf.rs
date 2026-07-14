@@ -2,7 +2,7 @@
 
 use mupdf::{
     pdf::{PdfDocument, Permission},
-    Document, Rect, TextBlockContent, TextPageFlags,
+    Document, DocumentWriter, Matrix, Rect, TextBlockContent, TextPageFlags,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -125,6 +125,58 @@ pub fn image_dpi(image: &ImageFact) -> f64 {
     x_dpi.min(y_dpi)
 }
 
+pub fn fit_pdf_to_a4(bytes: &[u8], margin_mm: f64) -> Result<Vec<u8>, PdfError> {
+    const A4_WIDTH_POINTS: f32 = 210.0 * 72.0 / 25.4;
+    const A4_HEIGHT_POINTS: f32 = 297.0 * 72.0 / 25.4;
+
+    let document = Document::from_bytes(bytes, "pdf").map_err(|_| PdfError::Mupdf)?;
+    let directory = tempfile::tempdir().map_err(|_| PdfError::Mupdf)?;
+    let output = directory.path().join("fitted.pdf");
+    let output_path = output.to_str().ok_or(PdfError::Mupdf)?;
+    let a4 = Rect::new(0.0, 0.0, A4_WIDTH_POINTS, A4_HEIGHT_POINTS);
+
+    {
+        let mut writer =
+            DocumentWriter::new(output_path, "pdf", "").map_err(|_| PdfError::Mupdf)?;
+        let page_count = document.page_count().map_err(|_| PdfError::Mupdf)?;
+        for page_number in 0..page_count {
+            let page = document
+                .load_page(page_number)
+                .map_err(|_| PdfError::Mupdf)?;
+            let bounds = page.bounds().map_err(|_| PdfError::Mupdf)?;
+            let matrix = fit_matrix(bounds, margin_mm as f32).ok_or(PdfError::Mupdf)?;
+            let device = writer.begin_page(a4).map_err(|_| PdfError::Mupdf)?;
+            page.run(&device, &matrix).map_err(|_| PdfError::Mupdf)?;
+            writer.end_page(device).map_err(|_| PdfError::Mupdf)?;
+        }
+    }
+
+    std::fs::read(output).map_err(|_| PdfError::Mupdf)
+}
+
+fn fit_matrix(source: Rect, margin_mm: f32) -> Option<Matrix> {
+    const A4_WIDTH_POINTS: f32 = 210.0 * 72.0 / 25.4;
+    const A4_HEIGHT_POINTS: f32 = 297.0 * 72.0 / 25.4;
+
+    let margin = margin_mm * 72.0 / 25.4;
+    let available_width = A4_WIDTH_POINTS - (margin * 2.0);
+    let available_height = A4_HEIGHT_POINTS - (margin * 2.0);
+    if !margin.is_finite()
+        || margin < 0.0
+        || available_width <= 0.0
+        || available_height <= 0.0
+        || source.is_empty()
+    {
+        return None;
+    }
+
+    let scale = (available_width / source.width()).min(available_height / source.height());
+    let x = margin + ((available_width - source.width() * scale) / 2.0) - source.x0 * scale;
+    let y = margin + ((available_height - source.height() * scale) / 2.0) - source.y0 * scale;
+
+    Some(Matrix::new(scale, 0.0, 0.0, scale, x, y))
+}
+
 pub fn inspect_pdf(bytes: &[u8]) -> Result<PdfInspection, PdfError> {
     let doc = Document::from_bytes(bytes, "pdf").map_err(|_| PdfError::Mupdf)?;
     let encrypted = doc.needs_password().map_err(|_| PdfError::Mupdf)?;
@@ -228,6 +280,29 @@ pub fn inspect_pdf(bytes: &[u8]) -> Result<PdfInspection, PdfError> {
     })
 }
 
+pub fn inspect_pdf_metadata(bytes: &[u8]) -> Result<PdfInspection, PdfError> {
+    let document = Document::from_bytes(bytes, "pdf").map_err(|_| PdfError::Mupdf)?;
+    let encrypted = document.needs_password().map_err(|_| PdfError::Mupdf)?;
+    let pdf_document = PdfDocument::from_bytes(bytes).ok();
+    let restrictive_permissions = pdf_document
+        .as_ref()
+        .map(|pdf| pdf.permissions().bits() != Permission::all().bits())
+        .unwrap_or(false);
+    let page_count = if encrypted {
+        None
+    } else {
+        Some(document.page_count().map_err(|_| PdfError::Mupdf)?.max(0) as u32)
+    };
+
+    Ok(PdfInspection {
+        readable: true,
+        encrypted,
+        restrictive_permissions,
+        page_count,
+        pages: Vec::new(),
+    })
+}
+
 fn union_rect(target: &mut Option<Rect>, rect: Rect) {
     if rect.is_empty() || !rect.is_valid() {
         return;
@@ -251,5 +326,24 @@ fn rect_size_mm(rect: Rect) -> PageSizeMm {
     PageSizeMm {
         w_mm: f64::from(rect.width()) * PT_TO_MM,
         h_mm: f64::from(rect.height()) * PT_TO_MM,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fit_matrix_centres_content_inside_a4_margin() {
+        let source = Rect::new(0.0, 0.0, 500.0, 500.0);
+        let fitted = source.transform(&fit_matrix(source, 5.0).unwrap());
+        let margin_points = 5.0 * 72.0 / 25.4;
+        let a4 = Rect::new(0.0, 0.0, 210.0 * 72.0 / 25.4, 297.0 * 72.0 / 25.4);
+
+        assert!((fitted.x0 - margin_points).abs() < 0.01);
+        assert!((fitted.x1 - (a4.x1 - margin_points)).abs() < 0.01);
+        assert!(fitted.y0 >= margin_points);
+        assert!(fitted.y1 <= a4.y1 - margin_points);
+        assert!((fitted.width() - fitted.height()).abs() < 0.01);
     }
 }
