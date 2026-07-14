@@ -19,6 +19,12 @@ pub async fn process(
     State(state): State<AppState>,
     multipart: Multipart,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let permit = state
+        .processing_permits
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| ApiError::ServiceUnavailable)?;
     let upload = parse_upload(&state, multipart, true).await?;
     let job_id = Uuid::new_v4();
     let target = CallbackTarget {
@@ -28,6 +34,7 @@ pub async fn process(
     let state_for_job = state.clone();
 
     tokio::spawn(async move {
+        let _permit = permit;
         let _ = pipeline::run(
             &state_for_job,
             job_id,

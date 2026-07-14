@@ -54,6 +54,7 @@ Environment variables:
 - `GS_CONCURRENCY` default logical CPU count
 - `GS_BIN` default `gs`
 - `GS_TIMEOUT_SECONDS` default `300`
+- `CALLBACK_HOSTS` comma-separated allowlist required by `/pdf/process`
 - `RUST_LOG` default from tracing subscriber
 
 ## Run

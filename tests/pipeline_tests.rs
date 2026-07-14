@@ -104,6 +104,28 @@ fn colour_check_failure_is_a_hard_failure() {
     assert_eq!(check.status, CheckStatus::Fail);
 }
 
+#[test]
+fn encrypted_check_only_rejects_encryption_or_disabled_printing() {
+    let printable = preflight_rs::pdf::PdfInspection {
+        readable: true,
+        encrypted: false,
+        printing_disallowed: false,
+        page_count: Some(1),
+        pages: Vec::new(),
+    };
+    let mut blocked = printable.clone();
+    blocked.printing_disallowed = true;
+
+    assert_eq!(
+        preflight_rs::pipeline::checks::encrypted::check(&printable).status,
+        CheckStatus::Pass
+    );
+    assert_eq!(
+        preflight_rs::pipeline::checks::encrypted::check(&blocked).status,
+        CheckStatus::Fail
+    );
+}
+
 fn result() -> PreflightResult {
     let file = FileInfo {
         bytes: 10,

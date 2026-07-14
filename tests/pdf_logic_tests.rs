@@ -25,21 +25,30 @@ fn margin_logic_flags_content_inside_threshold_from_any_edge() {
 }
 
 #[test]
-fn blank_page_requires_no_text_and_no_images() {
+fn blank_page_requires_no_text_images_or_vector_drawings() {
     assert!(is_blank_page(&PageContentFact {
         page: 1,
         text_chars: 0,
-        image_count: 0
+        image_count: 0,
+        drawing_count: 0,
     }));
     assert!(!is_blank_page(&PageContentFact {
         page: 1,
         text_chars: 1,
-        image_count: 0
+        image_count: 0,
+        drawing_count: 0,
     }));
     assert!(!is_blank_page(&PageContentFact {
         page: 1,
         text_chars: 0,
-        image_count: 1
+        image_count: 1,
+        drawing_count: 0,
+    }));
+    assert!(!is_blank_page(&PageContentFact {
+        page: 1,
+        text_chars: 0,
+        image_count: 0,
+        drawing_count: 1,
     }));
 }
 

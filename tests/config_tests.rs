@@ -2,7 +2,10 @@
 
 use std::sync::{Mutex, OnceLock};
 
-use preflight_rs::config::{Config, ConfigError};
+use preflight_rs::{
+    config::{Config, ConfigError},
+    AppState,
+};
 
 static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -15,4 +18,14 @@ fn config_rejects_placeholder_api_token() {
 
     assert!(matches!(error, ConfigError::Invalid("API_BEARER_TOKEN")));
     std::env::remove_var("API_BEARER_TOKEN");
+}
+
+#[test]
+fn processing_concurrency_uses_configured_ghostscript_limit() {
+    let mut config = Config::for_tests("secret");
+    config.gs_concurrency = 2;
+
+    let state = AppState::new(config);
+
+    assert_eq!(state.processing_permits.available_permits(), 2);
 }

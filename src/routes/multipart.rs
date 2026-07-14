@@ -66,6 +66,13 @@ pub async fn parse_upload(
     if require_callback && callback_url.as_deref().unwrap_or_default().is_empty() {
         return Err(ApiError::BadRequest);
     }
+    if require_callback
+        && !callback_url
+            .as_deref()
+            .is_some_and(|url| callback_is_allowed(state, url))
+    {
+        return Err(ApiError::BadRequest);
+    }
     if options.max_pages == 0
         || !options.margin_mm.is_finite()
         || !(0.0..105.0).contains(&options.margin_mm)
@@ -83,6 +90,27 @@ pub async fn parse_upload(
         callback_token,
         options,
     })
+}
+
+fn callback_is_allowed(state: &AppState, value: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(value) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let secure = url.scheme() == "https"
+        || (url.scheme() == "http"
+            && host
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|address| address.is_loopback()));
+
+    secure
+        && state
+            .config
+            .callback_hosts
+            .iter()
+            .any(|allowed| host.eq_ignore_ascii_case(allowed))
 }
 
 async fn parse_field<T>(field: axum::extract::multipart::Field<'_>) -> Result<T, ApiError>

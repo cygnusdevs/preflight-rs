@@ -426,6 +426,34 @@ async fn process_requires_callback_url() {
 }
 
 #[tokio::test]
+async fn process_rejects_callback_hosts_outside_allowlist() {
+    let boundary = "X-BOUNDARY";
+    let body = multipart_body(
+        boundary,
+        NORMAL_PDF,
+        &[("callback_url", "http://169.254.169.254/latest/meta-data")],
+    );
+
+    let response = app(AppState::new(Config::for_tests("secret")))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/pdf/process")
+                .header("authorization", "Bearer secret")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn process_accepts_pdf_fixture_and_returns_job_id() {
     let boundary = "X-BOUNDARY";
     let body = multipart_body(

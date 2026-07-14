@@ -17,6 +17,11 @@ pub async fn prepare(
     State(state): State<AppState>,
     multipart: Multipart,
 ) -> Result<Response<Body>, ApiError> {
+    let _permit = state
+        .processing_permits
+        .acquire()
+        .await
+        .map_err(|_| ApiError::ServiceUnavailable)?;
     let upload = parse_upload(&state, multipart, false).await?;
     let output = pipeline::run(&state, Uuid::new_v4(), upload.file, upload.options, None).await;
     let boundary = Uuid::new_v4().simple().to_string();

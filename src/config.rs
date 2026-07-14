@@ -56,6 +56,7 @@ pub struct Config {
     pub gs_concurrency: usize,
     pub gs_bin: String,
     pub gs_timeout: Duration,
+    pub callback_hosts: Vec<String>,
 }
 
 #[derive(Debug, Error)]
@@ -99,6 +100,13 @@ impl Config {
                 .unwrap_or_else(|| num_cpus::get().max(1)),
             gs_bin: env::var("GS_BIN").unwrap_or_else(|_| "gs".to_owned()),
             gs_timeout: Duration::from_secs(parse_env("GS_TIMEOUT_SECONDS", "300")?),
+            callback_hosts: env::var("CALLBACK_HOSTS")
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|host| !host.is_empty())
+                .map(str::to_owned)
+                .collect(),
         })
     }
 
@@ -111,6 +119,7 @@ impl Config {
             gs_concurrency: 1,
             gs_bin: "gs".to_owned(),
             gs_timeout: Duration::from_secs(300),
+            callback_hosts: vec!["127.0.0.1".to_owned()],
         }
     }
 }

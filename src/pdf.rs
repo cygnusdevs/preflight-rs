@@ -44,6 +44,7 @@ pub struct PageContentFact {
     pub page: u32,
     pub text_chars: usize,
     pub image_count: usize,
+    pub drawing_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -67,7 +68,7 @@ pub struct PageFact {
 pub struct PdfInspection {
     pub readable: bool,
     pub encrypted: bool,
-    pub restrictive_permissions: bool,
+    pub printing_disallowed: bool,
     pub page_count: Option<u32>,
     pub pages: Vec<PageFact>,
 }
@@ -111,7 +112,7 @@ pub fn is_tight_to_edge(page: RectMm, content: RectMm, threshold_mm: f64) -> boo
 }
 
 pub fn is_blank_page(content: &PageContentFact) -> bool {
-    content.text_chars == 0 && content.image_count == 0
+    content.text_chars == 0 && content.image_count == 0 && content.drawing_count == 0
 }
 
 pub fn image_dpi(image: &ImageFact) -> f64 {
@@ -181,16 +182,16 @@ pub fn inspect_pdf(bytes: &[u8]) -> Result<PdfInspection, PdfError> {
     let doc = Document::from_bytes(bytes, "pdf").map_err(|_| PdfError::Mupdf)?;
     let encrypted = doc.needs_password().map_err(|_| PdfError::Mupdf)?;
     let pdf_doc = PdfDocument::from_bytes(bytes).ok();
-    let restrictive_permissions = pdf_doc
+    let printing_disallowed = pdf_doc
         .as_ref()
-        .map(|pdf| pdf.permissions().bits() != Permission::all().bits())
+        .map(|pdf| !pdf.permissions().contains(Permission::PRINT))
         .unwrap_or(false);
 
     if encrypted {
         return Ok(PdfInspection {
             readable: true,
             encrypted: true,
-            restrictive_permissions,
+            printing_disallowed,
             page_count: None,
             pages: Vec::new(),
         });
@@ -228,11 +229,15 @@ pub fn inspect_pdf(bytes: &[u8]) -> Result<PdfInspection, PdfError> {
             }
         }
 
-        if let Ok(drawings) = page.drawings() {
+        let drawing_count = if let Ok(drawings) = page.drawings() {
+            let count = drawings.len();
             for drawing in drawings {
                 union_rect(&mut content_bbox, drawing.rect);
             }
-        }
+            count
+        } else {
+            0
+        };
 
         let page_images = pdf_doc
             .as_ref()
@@ -240,23 +245,7 @@ pub fn inspect_pdf(bytes: &[u8]) -> Result<PdfInspection, PdfError> {
             .and_then(|pdf_page| pdf_page.images().ok())
             .unwrap_or_default();
 
-        let images = page_images
-            .iter()
-            .enumerate()
-            .map(|(idx, image)| {
-                let placed = image_blocks
-                    .get(idx)
-                    .copied()
-                    .map(rect_size_mm)
-                    .unwrap_or(size);
-                ImageFact {
-                    page: index + 1,
-                    pixel_width: image.width,
-                    pixel_height: image.height,
-                    placed,
-                }
-            })
-            .collect::<Vec<_>>();
+        let images = image_facts(index + 1, &page_images, &image_blocks);
 
         pages.push(PageFact {
             page: index + 1,
@@ -266,6 +255,7 @@ pub fn inspect_pdf(bytes: &[u8]) -> Result<PdfInspection, PdfError> {
                 page: index + 1,
                 text_chars: text.trim().chars().count(),
                 image_count: page_images.len().max(image_blocks.len()),
+                drawing_count,
             },
             images,
         });
@@ -274,19 +264,38 @@ pub fn inspect_pdf(bytes: &[u8]) -> Result<PdfInspection, PdfError> {
     Ok(PdfInspection {
         readable: true,
         encrypted,
-        restrictive_permissions,
+        printing_disallowed,
         page_count: Some(page_count),
         pages,
     })
+}
+
+fn image_facts(
+    page: u32,
+    images: &[mupdf::pdf::PageImageInfo],
+    placements: &[Rect],
+) -> Vec<ImageFact> {
+    // ponytail: resources and placements are separate; omit ambiguous multi-image DPI until
+    // MuPDF device callbacks can pair them reliably.
+    if images.len() != 1 || placements.len() != 1 {
+        return Vec::new();
+    }
+
+    vec![ImageFact {
+        page,
+        pixel_width: images[0].width,
+        pixel_height: images[0].height,
+        placed: rect_size_mm(placements[0]),
+    }]
 }
 
 pub fn inspect_pdf_metadata(bytes: &[u8]) -> Result<PdfInspection, PdfError> {
     let document = Document::from_bytes(bytes, "pdf").map_err(|_| PdfError::Mupdf)?;
     let encrypted = document.needs_password().map_err(|_| PdfError::Mupdf)?;
     let pdf_document = PdfDocument::from_bytes(bytes).ok();
-    let restrictive_permissions = pdf_document
+    let printing_disallowed = pdf_document
         .as_ref()
-        .map(|pdf| pdf.permissions().bits() != Permission::all().bits())
+        .map(|pdf| !pdf.permissions().contains(Permission::PRINT))
         .unwrap_or(false);
     let page_count = if encrypted {
         None
@@ -297,7 +306,7 @@ pub fn inspect_pdf_metadata(bytes: &[u8]) -> Result<PdfInspection, PdfError> {
     Ok(PdfInspection {
         readable: true,
         encrypted,
-        restrictive_permissions,
+        printing_disallowed,
         page_count,
         pages: Vec::new(),
     })
@@ -345,5 +354,28 @@ mod tests {
         assert!(fitted.y0 >= margin_points);
         assert!(fitted.y1 <= a4.y1 - margin_points);
         assert!((fitted.width() - fitted.height()).abs() < 0.01);
+    }
+
+    #[test]
+    fn ambiguous_image_placements_are_not_guessed() {
+        let images = vec![extracted_image(1), extracted_image(2)];
+        let placements = vec![
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            Rect::new(100.0, 100.0, 200.0, 200.0),
+        ];
+
+        assert!(image_facts(1, &images, &placements,).is_empty());
+    }
+
+    fn extracted_image(xref: i32) -> mupdf::pdf::PageImageInfo {
+        mupdf::pdf::PageImageInfo {
+            name: format!("Im{xref}"),
+            xref,
+            width: 300,
+            height: 300,
+            bits_per_component: Some(8),
+            color_space: Some("DeviceRGB".to_owned()),
+            filter: None,
+        }
     }
 }

@@ -93,7 +93,7 @@ pub async fn run(
 
     let can_transform = source_inspection
         .as_ref()
-        .is_some_and(|inspection| !inspection.encrypted && !inspection.restrictive_permissions);
+        .is_some_and(|inspection| !inspection.encrypted && !inspection.printing_disallowed);
     let mut fitted_to_page = false;
     let fitting_failed = if can_transform && options.fit_to_page {
         match pdf::fit_pdf_to_a4(&analysis_bytes, options.margin_mm) {

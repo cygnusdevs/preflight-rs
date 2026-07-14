@@ -25,15 +25,18 @@ use crate::{callback::CallbackClient, config::Config};
 pub struct AppState {
     pub config: Arc<Config>,
     pub gs_permits: Arc<Semaphore>,
+    pub processing_permits: Arc<Semaphore>,
     pub callbacks: CallbackClient,
 }
 
 impl AppState {
     pub fn new(config: Config) -> Self {
         let gs_permits = Arc::new(Semaphore::new(config.gs_concurrency));
+        let processing_permits = Arc::new(Semaphore::new(config.gs_concurrency));
         Self {
             config: Arc::new(config),
             gs_permits,
+            processing_permits,
             callbacks: CallbackClient::new(),
         }
     }

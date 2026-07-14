@@ -8,7 +8,7 @@ use crate::{
 };
 
 pub fn check(inspection: &PdfInspection) -> CheckResult {
-    let encrypted = inspection.encrypted || inspection.restrictive_permissions;
+    let encrypted = inspection.encrypted || inspection.printing_disallowed;
     CheckResult::new(
         "encrypted",
         Severity::Error,

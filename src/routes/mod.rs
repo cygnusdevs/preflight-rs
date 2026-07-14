@@ -37,6 +37,7 @@ pub async fn version(State(state): State<AppState>) -> Json<VersionInfo> {
 pub enum ApiError {
     BadRequest,
     PayloadTooLarge,
+    ServiceUnavailable,
 }
 
 impl IntoResponse for ApiError {
@@ -44,6 +45,7 @@ impl IntoResponse for ApiError {
         match self {
             Self::BadRequest => StatusCode::BAD_REQUEST,
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::ServiceUnavailable => StatusCode::SERVICE_UNAVAILABLE,
         }
         .into_response()
     }
