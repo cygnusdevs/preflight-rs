@@ -140,6 +140,7 @@ pub async fn run(
     )
     .await
     .ok()
+    .and_then(|coverage| validated_coverage(coverage, inspection.pages.len()))
     .map(|coverage| coverage_for_mode(coverage, options.color_mode));
     result.pages = page_results(&inspection, coverage.as_deref(), &options);
     let colour = coverage.clone().map_or_else(
@@ -166,6 +167,16 @@ pub async fn run(
     .await;
 
     finalize(state, callback, result).await
+}
+
+/// Ghostscript can fail partway through a document and still exit successfully,
+/// leaving a truncated-but-parseable coverage list. Treat anything other than a
+/// full page-for-page match as missing coverage rather than silently underpricing.
+fn validated_coverage(
+    coverage: Vec<InkCoverage>,
+    expected_pages: usize,
+) -> Option<Vec<InkCoverage>> {
+    (coverage.len() == expected_pages).then_some(coverage)
 }
 
 fn coverage_for_mode(mut coverage: Vec<InkCoverage>, color_mode: ColorMode) -> Vec<InkCoverage> {
@@ -317,6 +328,20 @@ fn file_info(bytes: &[u8]) -> FileInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truncated_coverage_is_rejected() {
+        let coverage = vec![InkCoverage {
+            page: 1,
+            c: 0.1,
+            m: 0.1,
+            y: 0.1,
+            k: 0.1,
+        }];
+
+        assert_eq!(validated_coverage(coverage.clone(), 2), None);
+        assert_eq!(validated_coverage(coverage.clone(), 1), Some(coverage));
+    }
 
     #[test]
     fn mono_coverage_reports_gray_as_black_only() {

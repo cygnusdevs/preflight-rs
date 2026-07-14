@@ -7,6 +7,10 @@ use tempfile::tempdir;
 use thiserror::Error;
 use tokio::{process::Command, sync::Semaphore};
 
+/// Render resolution for ink coverage analysis. Ghostscript's default (72dpi)
+/// under-samples thin strokes and text, skewing coverage on text-heavy pages.
+const INKCOV_RESOLUTION_DPI: u32 = 150;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InkCoverage {
     pub page: u32,
@@ -122,6 +126,7 @@ async fn run_inkcov_file(
         .arg("-o")
         .arg("-")
         .arg("-sDEVICE=inkcov")
+        .arg(format!("-r{INKCOV_RESOLUTION_DPI}"))
         .arg(path);
     let output = output_with_timeout(command, timeout).await?;
 
