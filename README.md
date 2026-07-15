@@ -141,9 +141,10 @@ curl -sS \
 ```
 
 When `fit_to_page=true`, every source page is scaled proportionally and centred
-on an A4 page inside the requested `margin_mm`. Content is never cropped or
-stretched. The service uses temporary files only while processing the request
-and does not persist uploads or prepared PDFs.
+on an A4 page matching its portrait or landscape orientation inside the
+requested `margin_mm`. Content is never cropped or stretched. The service uses
+temporary files only while processing the request and does not persist uploads
+or prepared PDFs.
 
 ## Result Schema
 

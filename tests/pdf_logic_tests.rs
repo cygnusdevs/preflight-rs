@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+use mupdf::pdf::PdfDocument;
 use preflight_rs::pdf::{
     fit_pdf_to_a4, image_dpi, inspect_pdf, is_a4_size_mm, is_blank_page, is_tight_to_edge,
     ImageFact, PageContentFact, PageSizeMm, RectMm,
@@ -83,6 +84,27 @@ fn fitting_pdf_emits_a4_pages_with_preserved_content() {
     assert!(!is_tight_to_edge(
         RectMm::new(0.0, 0.0, 210.0, 297.0),
         inspection.pages[0].content_bbox.unwrap(),
+        5.0,
+    ));
+}
+
+#[test]
+fn fitting_landscape_pdf_preserves_landscape_orientation() {
+    let document = PdfDocument::from_bytes(NORMAL_PDF).unwrap();
+    let mut source_page = document.load_pdf_page(0).unwrap();
+    source_page.set_rotation(90).unwrap();
+    drop(source_page);
+    let mut landscape_pdf = Vec::new();
+    document.write_to(&mut landscape_pdf).unwrap();
+
+    let output = fit_pdf_to_a4(&landscape_pdf, 5.0).unwrap();
+    let page = &inspect_pdf(&output).unwrap().pages[0];
+
+    assert!(page.size.w_mm > page.size.h_mm);
+    assert!(is_a4_size_mm(page.size.w_mm, page.size.h_mm));
+    assert!(!is_tight_to_edge(
+        RectMm::new(0.0, 0.0, 297.0, 210.0),
+        page.content_bbox.unwrap(),
         5.0,
     ));
 }

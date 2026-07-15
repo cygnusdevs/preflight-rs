@@ -134,8 +134,6 @@ pub fn fit_pdf_to_a4(bytes: &[u8], margin_mm: f64) -> Result<Vec<u8>, PdfError> 
     let directory = tempfile::tempdir().map_err(|_| PdfError::Mupdf)?;
     let output = directory.path().join("fitted.pdf");
     let output_path = output.to_str().ok_or(PdfError::Mupdf)?;
-    let a4 = Rect::new(0.0, 0.0, A4_WIDTH_POINTS, A4_HEIGHT_POINTS);
-
     {
         let mut writer =
             DocumentWriter::new(output_path, "pdf", "").map_err(|_| PdfError::Mupdf)?;
@@ -145,7 +143,12 @@ pub fn fit_pdf_to_a4(bytes: &[u8], margin_mm: f64) -> Result<Vec<u8>, PdfError> 
                 .load_page(page_number)
                 .map_err(|_| PdfError::Mupdf)?;
             let bounds = page.bounds().map_err(|_| PdfError::Mupdf)?;
-            let matrix = fit_matrix(bounds, margin_mm as f32).ok_or(PdfError::Mupdf)?;
+            let a4 = if bounds.width() > bounds.height() {
+                Rect::new(0.0, 0.0, A4_HEIGHT_POINTS, A4_WIDTH_POINTS)
+            } else {
+                Rect::new(0.0, 0.0, A4_WIDTH_POINTS, A4_HEIGHT_POINTS)
+            };
+            let matrix = fit_matrix(bounds, a4, margin_mm as f32).ok_or(PdfError::Mupdf)?;
             let device = writer.begin_page(a4).map_err(|_| PdfError::Mupdf)?;
             page.run(&device, &matrix).map_err(|_| PdfError::Mupdf)?;
             writer.end_page(device).map_err(|_| PdfError::Mupdf)?;
@@ -155,13 +158,10 @@ pub fn fit_pdf_to_a4(bytes: &[u8], margin_mm: f64) -> Result<Vec<u8>, PdfError> 
     std::fs::read(output).map_err(|_| PdfError::Mupdf)
 }
 
-fn fit_matrix(source: Rect, margin_mm: f32) -> Option<Matrix> {
-    const A4_WIDTH_POINTS: f32 = 210.0 * 72.0 / 25.4;
-    const A4_HEIGHT_POINTS: f32 = 297.0 * 72.0 / 25.4;
-
+fn fit_matrix(source: Rect, target: Rect, margin_mm: f32) -> Option<Matrix> {
     let margin = margin_mm * 72.0 / 25.4;
-    let available_width = A4_WIDTH_POINTS - (margin * 2.0);
-    let available_height = A4_HEIGHT_POINTS - (margin * 2.0);
+    let available_width = target.width() - (margin * 2.0);
+    let available_height = target.height() - (margin * 2.0);
     if !margin.is_finite()
         || margin < 0.0
         || available_width <= 0.0
@@ -172,8 +172,10 @@ fn fit_matrix(source: Rect, margin_mm: f32) -> Option<Matrix> {
     }
 
     let scale = (available_width / source.width()).min(available_height / source.height());
-    let x = margin + ((available_width - source.width() * scale) / 2.0) - source.x0 * scale;
-    let y = margin + ((available_height - source.height() * scale) / 2.0) - source.y0 * scale;
+    let x =
+        target.x0 + margin + ((available_width - source.width() * scale) / 2.0) - source.x0 * scale;
+    let y = target.y0 + margin + ((available_height - source.height() * scale) / 2.0)
+        - source.y0 * scale;
 
     Some(Matrix::new(scale, 0.0, 0.0, scale, x, y))
 }
@@ -345,9 +347,9 @@ mod tests {
     #[test]
     fn fit_matrix_centres_content_inside_a4_margin() {
         let source = Rect::new(0.0, 0.0, 500.0, 500.0);
-        let fitted = source.transform(&fit_matrix(source, 5.0).unwrap());
-        let margin_points = 5.0 * 72.0 / 25.4;
         let a4 = Rect::new(0.0, 0.0, 210.0 * 72.0 / 25.4, 297.0 * 72.0 / 25.4);
+        let fitted = source.transform(&fit_matrix(source, a4, 5.0).unwrap());
+        let margin_points = 5.0 * 72.0 / 25.4;
 
         assert!((fitted.x0 - margin_points).abs() < 0.01);
         assert!((fitted.x1 - (a4.x1 - margin_points)).abs() < 0.01);
