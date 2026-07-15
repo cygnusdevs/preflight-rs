@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use mupdf::{
-    pdf::{PdfDocument, Permission},
-    Document, DocumentWriter, Matrix, Rect, TextBlockContent, TextPageFlags,
+    pdf::{PdfDocument, PdfObject, PdfPage, Permission},
+    Buffer, Document, Matrix, Rect, TextBlockContent, TextPageFlags,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -130,32 +130,172 @@ pub fn fit_pdf_to_a4(bytes: &[u8], margin_mm: f64) -> Result<Vec<u8>, PdfError> 
     const A4_WIDTH_POINTS: f32 = 210.0 * 72.0 / 25.4;
     const A4_HEIGHT_POINTS: f32 = 297.0 * 72.0 / 25.4;
 
-    let document = Document::from_bytes(bytes, "pdf").map_err(|_| PdfError::Mupdf)?;
-    let directory = tempfile::tempdir().map_err(|_| PdfError::Mupdf)?;
-    let output = directory.path().join("fitted.pdf");
-    let output_path = output.to_str().ok_or(PdfError::Mupdf)?;
-    {
-        let mut writer =
-            DocumentWriter::new(output_path, "pdf", "").map_err(|_| PdfError::Mupdf)?;
-        let page_count = document.page_count().map_err(|_| PdfError::Mupdf)?;
-        for page_number in 0..page_count {
-            let page = document
-                .load_page(page_number)
-                .map_err(|_| PdfError::Mupdf)?;
-            let bounds = page.bounds().map_err(|_| PdfError::Mupdf)?;
-            let a4 = if bounds.width() > bounds.height() {
-                Rect::new(0.0, 0.0, A4_HEIGHT_POINTS, A4_WIDTH_POINTS)
-            } else {
-                Rect::new(0.0, 0.0, A4_WIDTH_POINTS, A4_HEIGHT_POINTS)
-            };
-            let matrix = fit_matrix(bounds, a4, margin_mm as f32).ok_or(PdfError::Mupdf)?;
-            let device = writer.begin_page(a4).map_err(|_| PdfError::Mupdf)?;
-            page.run(&device, &matrix).map_err(|_| PdfError::Mupdf)?;
-            writer.end_page(device).map_err(|_| PdfError::Mupdf)?;
-        }
+    let mut document = PdfDocument::from_bytes(bytes).map_err(|_| PdfError::Mupdf)?;
+    document.bake(true, true).map_err(|_| PdfError::Mupdf)?;
+    let page_count = document.page_count().map_err(|_| PdfError::Mupdf)?;
+
+    for page_number in 0..page_count {
+        let mut page = document
+            .load_pdf_page(page_number)
+            .map_err(|_| PdfError::Mupdf)?;
+        let bounds = page.bounds().map_err(|_| PdfError::Mupdf)?;
+        let visual_target = if bounds.width() > bounds.height() {
+            Rect::new(0.0, 0.0, A4_HEIGHT_POINTS, A4_WIDTH_POINTS)
+        } else {
+            Rect::new(0.0, 0.0, A4_WIDTH_POINTS, A4_HEIGHT_POINTS)
+        };
+        let rotation = page
+            .rotation()
+            .map_err(|_| PdfError::Mupdf)?
+            .rem_euclid(360);
+        let media_target = if rotation == 90 || rotation == 270 {
+            Rect::new(0.0, 0.0, visual_target.height(), visual_target.width())
+        } else {
+            visual_target
+        };
+        let source = page.crop_box().map_err(|_| PdfError::Mupdf)?;
+        let matrix = fit_matrix(source, media_target, margin_mm as f32).ok_or(PdfError::Mupdf)?;
+
+        place_page_as_form(&mut document, &mut page, source, media_target, matrix)?;
     }
 
-    std::fs::read(output).map_err(|_| PdfError::Mupdf)
+    let mut output = Vec::new();
+    document
+        .write_to(&mut output)
+        .map_err(|_| PdfError::Mupdf)?;
+
+    Ok(output)
+}
+
+fn place_page_as_form(
+    document: &mut PdfDocument,
+    page: &mut PdfPage,
+    source: Rect,
+    target: Rect,
+    matrix: Matrix,
+) -> Result<(), PdfError> {
+    let contents = page_contents(page)?;
+    let page_object = page.object();
+    let resources = page_object
+        .get_dict_inheritable("Resources")
+        .map_err(|_| PdfError::Mupdf)?
+        .unwrap_or(document.new_dict().map_err(|_| PdfError::Mupdf)?);
+    let transparency_group = page_object.get_dict("Group").map_err(|_| PdfError::Mupdf)?;
+
+    let mut form_dictionary = document.new_dict().map_err(|_| PdfError::Mupdf)?;
+    form_dictionary
+        .dict_put(
+            "Type",
+            PdfObject::new_name("XObject").map_err(|_| PdfError::Mupdf)?,
+        )
+        .map_err(|_| PdfError::Mupdf)?;
+    form_dictionary
+        .dict_put(
+            "Subtype",
+            PdfObject::new_name("Form").map_err(|_| PdfError::Mupdf)?,
+        )
+        .map_err(|_| PdfError::Mupdf)?;
+    form_dictionary
+        .dict_put("BBox", rect_object(document, source)?)
+        .map_err(|_| PdfError::Mupdf)?;
+    form_dictionary
+        .dict_put("Resources", resources)
+        .map_err(|_| PdfError::Mupdf)?;
+    if let Some(group) = transparency_group {
+        form_dictionary
+            .dict_put("Group", group)
+            .map_err(|_| PdfError::Mupdf)?;
+    }
+
+    let form_buffer = Buffer::from_bytes(&contents).map_err(|_| PdfError::Mupdf)?;
+    let form = document
+        .add_stream(&form_buffer, Some(&form_dictionary), true)
+        .map_err(|_| PdfError::Mupdf)?;
+    let mut xobjects = document.new_dict().map_err(|_| PdfError::Mupdf)?;
+    xobjects
+        .dict_put("FittedPage", form)
+        .map_err(|_| PdfError::Mupdf)?;
+    let mut page_resources = document.new_dict().map_err(|_| PdfError::Mupdf)?;
+    page_resources
+        .dict_put("XObject", xobjects)
+        .map_err(|_| PdfError::Mupdf)?;
+
+    let fitted_contents = format!(
+        "q\n{} {} {} {} {} {} cm\n/FittedPage Do\nQ\n",
+        matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f
+    );
+    let fitted_buffer =
+        Buffer::from_bytes(fitted_contents.as_bytes()).map_err(|_| PdfError::Mupdf)?;
+    let fitted_stream = document
+        .add_stream(&fitted_buffer, None, true)
+        .map_err(|_| PdfError::Mupdf)?;
+    let target_box = rect_object(document, target)?;
+    let mut page_object = page.object();
+    page_object
+        .dict_put("Contents", fitted_stream)
+        .map_err(|_| PdfError::Mupdf)?;
+    page_object
+        .dict_put("Resources", page_resources)
+        .map_err(|_| PdfError::Mupdf)?;
+    page_object
+        .dict_put(
+            "MediaBox",
+            target_box.try_clone().map_err(|_| PdfError::Mupdf)?,
+        )
+        .map_err(|_| PdfError::Mupdf)?;
+    page_object
+        .dict_put("CropBox", target_box)
+        .map_err(|_| PdfError::Mupdf)?;
+    page_object
+        .dict_put(
+            "UserUnit",
+            PdfObject::new_int(1).map_err(|_| PdfError::Mupdf)?,
+        )
+        .map_err(|_| PdfError::Mupdf)?;
+
+    page_object
+        .dict_delete("Group")
+        .map_err(|_| PdfError::Mupdf)?;
+
+    for box_name in ["BleedBox", "TrimBox", "ArtBox"] {
+        page_object
+            .dict_delete(box_name)
+            .map_err(|_| PdfError::Mupdf)?;
+    }
+
+    Ok(())
+}
+
+fn page_contents(page: &PdfPage) -> Result<Vec<u8>, PdfError> {
+    let Some(contents) = page.contents().map_err(|_| PdfError::Mupdf)? else {
+        return Ok(Vec::new());
+    };
+    let mut bytes = Vec::new();
+
+    if contents.is_array().map_err(|_| PdfError::Mupdf)? {
+        for stream in contents.array_iter().map_err(|_| PdfError::Mupdf)? {
+            bytes.extend(
+                stream
+                    .map_err(|_| PdfError::Mupdf)?
+                    .read_stream()
+                    .map_err(|_| PdfError::Mupdf)?,
+            );
+            bytes.push(b'\n');
+        }
+    } else {
+        bytes.extend(contents.read_stream().map_err(|_| PdfError::Mupdf)?);
+    }
+
+    Ok(bytes)
+}
+
+fn rect_object(document: &PdfDocument, rect: Rect) -> Result<PdfObject, PdfError> {
+    document
+        .new_object_from_str(&format!(
+            "[{} {} {} {}]",
+            rect.x0, rect.y0, rect.x1, rect.y1
+        ))
+        .map_err(|_| PdfError::Mupdf)
 }
 
 fn fit_matrix(source: Rect, target: Rect, margin_mm: f32) -> Option<Matrix> {
