@@ -2,7 +2,7 @@
 
 use mupdf::{
     pdf::{PdfDocument, PdfObject},
-    Rect,
+    Buffer, Rect,
 };
 use preflight_rs::pdf::{
     fit_pdf_to_a4, image_dpi, inspect_pdf, is_a4_size_mm, is_blank_page, is_tight_to_edge,
@@ -256,4 +256,24 @@ fn fitting_landscape_pdf_preserves_landscape_orientation() {
         page.content_bbox.unwrap(),
         5.0,
     ));
+}
+
+#[test]
+fn fitting_rotated_scan_uses_the_full_printable_page() {
+    let mut document = PdfDocument::new();
+    let mut page = document.new_page((841.68, 595.44)).unwrap();
+    page.set_rotation(270).unwrap();
+    let drawing = Buffer::from_bytes(b"0 0 841.68 595.44 re S").unwrap();
+    let contents = document.add_stream(&drawing, None, true).unwrap();
+    page.object().dict_put("Contents", contents).unwrap();
+    drop(page);
+    let mut rotated_scan = Vec::new();
+    document.write_to(&mut rotated_scan).unwrap();
+
+    let output = fit_pdf_to_a4(&rotated_scan, 5.0).unwrap();
+    let page = inspect_pdf(&output).unwrap().pages.remove(0);
+    let content = page.content_bbox.unwrap();
+
+    assert!(content.width() > 195.0);
+    assert!(content.height() > 280.0);
 }

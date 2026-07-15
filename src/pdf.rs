@@ -138,25 +138,15 @@ pub fn fit_pdf_to_a4(bytes: &[u8], margin_mm: f64) -> Result<Vec<u8>, PdfError> 
         let mut page = document
             .load_pdf_page(page_number)
             .map_err(|_| PdfError::Mupdf)?;
-        let bounds = page.bounds().map_err(|_| PdfError::Mupdf)?;
-        let visual_target = if bounds.width() > bounds.height() {
+        let source = source_page_box(&page)?;
+        let target = if source.width() > source.height() {
             Rect::new(0.0, 0.0, A4_HEIGHT_POINTS, A4_WIDTH_POINTS)
         } else {
             Rect::new(0.0, 0.0, A4_WIDTH_POINTS, A4_HEIGHT_POINTS)
         };
-        let rotation = page
-            .rotation()
-            .map_err(|_| PdfError::Mupdf)?
-            .rem_euclid(360);
-        let media_target = if rotation == 90 || rotation == 270 {
-            Rect::new(0.0, 0.0, visual_target.height(), visual_target.width())
-        } else {
-            visual_target
-        };
-        let source = page.crop_box().map_err(|_| PdfError::Mupdf)?;
-        let matrix = fit_matrix(source, media_target, margin_mm as f32).ok_or(PdfError::Mupdf)?;
+        let matrix = fit_matrix(source, target, margin_mm as f32).ok_or(PdfError::Mupdf)?;
 
-        place_page_as_form(&mut document, &mut page, source, media_target, matrix)?;
+        place_page_as_form(&mut document, &mut page, source, target, matrix)?;
     }
 
     let mut output = Vec::new();
@@ -165,6 +155,38 @@ pub fn fit_pdf_to_a4(bytes: &[u8], margin_mm: f64) -> Result<Vec<u8>, PdfError> 
         .map_err(|_| PdfError::Mupdf)?;
 
     Ok(output)
+}
+
+fn source_page_box(page: &PdfPage) -> Result<Rect, PdfError> {
+    let page_object = page.object();
+    let page_box = page_object
+        .get_dict_inheritable("CropBox")
+        .map_err(|_| PdfError::Mupdf)?
+        .or(page_object
+            .get_dict_inheritable("MediaBox")
+            .map_err(|_| PdfError::Mupdf)?)
+        .ok_or(PdfError::Mupdf)?;
+    let mut coordinates = [0.0; 4];
+
+    for (index, coordinate) in coordinates.iter_mut().enumerate() {
+        *coordinate = page_box
+            .get_array(index as i32)
+            .map_err(|_| PdfError::Mupdf)?
+            .ok_or(PdfError::Mupdf)?
+            .as_float()
+            .map_err(|_| PdfError::Mupdf)?;
+    }
+
+    if !coordinates.iter().all(|coordinate| coordinate.is_finite()) {
+        return Err(PdfError::Mupdf);
+    }
+
+    Ok(Rect::new(
+        coordinates[0],
+        coordinates[1],
+        coordinates[2],
+        coordinates[3],
+    ))
 }
 
 fn place_page_as_form(
